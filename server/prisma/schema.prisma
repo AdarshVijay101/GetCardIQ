@@ -1,0 +1,213 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User & Auth - SOC2 Ready
+model User {
+  id                    String    @id @default(uuid())
+  email                 String    @unique
+  passwordHash          String    @map("password_hash")
+  isLocked              Boolean   @default(false) @map("is_locked")
+  failedLoginAttempts   Int       @default(0) @map("failed_login_attempts")
+  lockoutUntil          DateTime? @map("lockout_until")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  cards             Card[]
+  sessions          Session[]
+  auditLogs         AuditLog[]
+  plaidConnections  PlaidConnection[]
+  notifications     Notification[]
+  agentSummaries    AgentSummary[]
+
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  tokenHash    String   @map("token_hash") // Hash of the JWT signature or checking value
+  expiresAt    DateTime @map("expires_at")
+  ipAddress    String?  @map("ip_address")
+  userAgent    String?  @map("user_agent")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?  @map("user_id")
+  action    String   // AUTH, DATA_ACCESS, SYNC, AI
+  resource  String?
+  details   Json?
+  ipAddress String?  @map("ip_address")
+  timestamp DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId, action, timestamp])
+  @@map("audit_logs")
+}
+
+// Financial Data
+model PlaidConnection {
+  id                    String   @id @default(uuid())
+  userId                String   @map("user_id")
+  itemId                String   @unique @map("item_id")
+  // Encryption fields (Upgrade A)
+  accessTokenCiphertext String   @map("access_token_ciphertext")
+  accessTokenIv         String   @map("access_token_iv")
+  accessTokenTag        String   @map("access_token_tag")
+  keyVersion            String   @default("v1") @map("key_version")
+  
+  status                String   @default("ACTIVE") // ACTIVE, ERROR
+  lastSyncedAt          DateTime? @map("last_synced_at")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accounts Account[]
+
+  @@map("plaid_connections")
+}
+
+model Account {
+  id                 String   @id @default(uuid())
+  connectionId       String   @map("connection_id")
+  plaidAccountId     String   @unique @map("plaid_account_id") // The ID Plaid gives
+  mask               String?  // Last 4 digits
+  name               String
+  type               String
+  subtype            String?
+  balance            Decimal? @db.Decimal(12, 2)
+  isoCurrencyCode    String?  @map("iso_currency_code")
+  
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  connection   PlaidConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@map("accounts")
+}
+
+model Transaction {
+  id                 String   @id @default(uuid())
+  accountId          String   @map("account_id")
+  plaidTransactionId String   @unique @map("plaid_transaction_id")
+  amount             Decimal  @db.Decimal(12, 2)
+  date               DateTime
+  merchantName       String?  @map("merchant_name")
+  
+  // Intelligence Fields
+  categoryId         String?  @map("category_id") // Link to our normalized MerchantCategory
+  recommendedCardId  String?  @map("recommended_card_id")
+  potentialExtraValue Decimal? @map("potential_extra_value") @db.Decimal(10, 4)
+  aiConfidence       Float?   @map("ai_confidence") 
+  isUnusual          Boolean   @default(false) @map("is_unusual")
+  isDuplicate        Boolean   @default(false) @map("is_duplicate")
+
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  
+  @@index([accountId, date])
+  @@map("transactions")
+}
+
+// Rewards Intelligence
+model Card {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  name      String
+  issuer    String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rewards  CardReward[]
+  benefits CardBenefit[]
+
+  @@map("cards")
+}
+
+model CardReward {
+  id          String  @id @default(uuid())
+  cardId      String  @map("card_id")
+  categoryId  String? @map("category_id") // Can be null for "base catch-all"
+  categoryName String? @map("category_name") // e.g. "Dining", "Travel"
+  multiplier  Decimal @db.Decimal(5, 2) // e.g. 3.00, 1.50
+  pointType   String  @map("point_type") // e.g. "UR", "MR", "Cashback"
+  
+  card Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@map("card_rewards")
+}
+
+model CardBenefit {
+  id          String    @id @default(uuid())
+  cardId      String    @map("card_id")
+  benefitName String    @map("benefit_name")
+  value       Decimal?  @db.Decimal(10, 2)
+  expiryDate  DateTime? @map("expiry_date")
+  usedAmount  Decimal   @default(0) @map("used_amount") @db.Decimal(10, 2)
+  totalAmount Decimal?  @map("total_amount") @db.Decimal(10, 2)
+  description String?
+  
+  card Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@map("card_benefits")
+}
+
+model MerchantCategory {
+  id                 String   @id @default(uuid())
+  plaidCategoryId    String?  @unique @map("plaid_category_id")
+  merchantName       String?  @map("merchant_name") // If mapping specific merchant
+  normalizedCategory String   @map("normalized_category") // Our internal category: Dining, Gas, etc.
+  userOverride       Boolean  @default(false) @map("user_override")
+  confidence         Float    @default(1.0)
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@map("merchant_categories")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  type      String   // ALERT, WEEKLY_SUMMARY, TIP
+  title     String
+  message   String
+  actionUrl String?  @map("action_url")
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+  readAt    DateTime? @map("read_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+model AgentSummary {
+  id              String   @id @default(uuid())
+  userId          String   @map("user_id")
+  startDate       DateTime @map("start_date")
+  endDate         DateTime @map("end_date")
+  summaryText     String   @db.Text @map("summary_text")
+  totalMissedValue Decimal @map("total_missed_value") @db.Decimal(10, 2)
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("agent_summaries")
+}
