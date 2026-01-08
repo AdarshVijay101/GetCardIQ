@@ -5,6 +5,7 @@ import { logger } from './utils/logger';
 import { apiLimiter } from './middlewares/rateLimiter';
 import authRoutes from './routes/auth.routes';
 import jobRoutes from './routes/jobs.routes';
+import plaidRoutes from "./routes/plaid.routes";
 
 const app = express();
 
@@ -36,5 +37,6 @@ app.get('/health', (req, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/jobs', jobRoutes);
+app.use("/api/plaid", plaidRoutes);
 
 export default app;
