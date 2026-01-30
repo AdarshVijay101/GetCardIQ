@@ -7,207 +7,311 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// User & Auth - SOC2 Ready
 model User {
-  id                    String    @id @default(uuid())
-  email                 String    @unique
-  passwordHash          String    @map("password_hash")
-  isLocked              Boolean   @default(false) @map("is_locked")
-  failedLoginAttempts   Int       @default(0) @map("failed_login_attempts")
-  lockoutUntil          DateTime? @map("lockout_until")
-  createdAt             DateTime  @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id                String    @id @default(uuid())
+  email             String    @unique
+  password_hash     String
+  two_factor_secret String?
+  two_factor_enabled Boolean  @default(false)
+  failed_login_attempts Int      @default(0)
+  is_locked         Boolean  @default(false)
+  lockout_until     DateTime?
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+  deleted_at        DateTime?
 
-  cards             Card[]
   sessions          Session[]
-  auditLogs         AuditLog[]
-  plaidConnections  PlaidConnection[]
+  cards             Card[]
+  plaid_connections PlaidConnection[]
+  transactions      Transaction[]
   notifications     Notification[]
-  agentSummaries    AgentSummary[]
+  audit_logs        AuditLog[]
+  jobs              JobRun[]
 
-  @@map("users")
+  // UX Overhaul Relations
+  profile           UserProfile?
+  credit_score      CreditScoreProfile?
+  budget            Budget?
+  goals             Goal[]
 }
 
 model Session {
-  id           String   @id @default(uuid())
-  userId       String   @map("user_id")
-  tokenHash    String   @map("token_hash") // Hash of the JWT signature or checking value
-  expiresAt    DateTime @map("expires_at")
-  ipAddress    String?  @map("ip_address")
-  userAgent    String?  @map("user_agent")
-  isActive     Boolean  @default(true) @map("is_active")
-  createdAt    DateTime @default(now()) @map("created_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@map("sessions")
+  id             String   @id @default(uuid())
+  user_id        String
+  user           User     @relation(fields: [user_id], references: [id])
+  token_hash     String
+  device_name    String?
+  ip_address     String?
+  user_agent     String?
+  expires_at     DateTime
+  last_active_at DateTime @default(now())
+  created_at     DateTime @default(now())
+  @@index([user_id])
 }
 
-model AuditLog {
-  id        String   @id @default(uuid())
-  userId    String?  @map("user_id")
-  action    String   // AUTH, DATA_ACCESS, SYNC, AI
-  resource  String?
-  details   Json?
-  ipAddress String?  @map("ip_address")
-  timestamp DateTime @default(now())
-
-  user User? @relation(fields: [userId], references: [id])
-
-  @@index([userId, action, timestamp])
-  @@map("audit_logs")
-}
-
-// Financial Data
-model PlaidConnection {
-  id                    String   @id @default(uuid())
-  userId                String   @map("user_id")
-  itemId                String   @unique @map("item_id")
-  // Encryption fields (Upgrade A)
-  accessTokenCiphertext String   @map("access_token_ciphertext")
-  accessTokenIv         String   @map("access_token_iv")
-  accessTokenTag        String   @map("access_token_tag")
-  keyVersion            String   @default("v1") @map("key_version")
-  
-  status                String   @default("ACTIVE") // ACTIVE, ERROR
-  lastSyncedAt          DateTime? @map("last_synced_at")
-  createdAt             DateTime @default(now()) @map("created_at")
-  updatedAt             DateTime @updatedAt @map("updated_at")
-
-  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  accounts Account[]
-
-  @@map("plaid_connections")
-}
-
-model Account {
-  id                 String   @id @default(uuid())
-  connectionId       String   @map("connection_id")
-  plaidAccountId     String   @unique @map("plaid_account_id") // The ID Plaid gives
-  mask               String?  // Last 4 digits
-  name               String
-  type               String
-  subtype            String?
-  balance            Decimal? @db.Decimal(12, 2)
-  isoCurrencyCode    String?  @map("iso_currency_code")
-  
-  createdAt          DateTime @default(now()) @map("created_at")
-  updatedAt          DateTime @updatedAt @map("updated_at")
-
-  connection   PlaidConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-  transactions Transaction[]
-
-  @@map("accounts")
-}
-
-model Transaction {
-  id                 String   @id @default(uuid())
-  accountId          String   @map("account_id")
-  plaidTransactionId String   @unique @map("plaid_transaction_id")
-  amount             Decimal  @db.Decimal(12, 2)
-  date               DateTime
-  merchantName       String?  @map("merchant_name")
-  
-  // Intelligence Fields
-  categoryId         String?  @map("category_id") // Link to our normalized MerchantCategory
-  recommendedCardId  String?  @map("recommended_card_id")
-  potentialExtraValue Decimal? @map("potential_extra_value") @db.Decimal(10, 4)
-  aiConfidence       Float?   @map("ai_confidence") 
-  isUnusual          Boolean   @default(false) @map("is_unusual")
-  isDuplicate        Boolean   @default(false) @map("is_duplicate")
-
-  createdAt          DateTime @default(now()) @map("created_at")
-  updatedAt          DateTime @updatedAt @map("updated_at")
-
-  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  
-  @@index([accountId, date])
-  @@map("transactions")
-}
-
-// Rewards Intelligence
 model Card {
-  id        String   @id @default(uuid())
-  userId    String   @map("user_id")
-  name      String
-  issuer    String
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id                 String    @id @default(uuid())
+  user_id            String
+  user               User      @relation(fields: [user_id], references: [id])
+  nickname           String
+  card_type          String
+  issuer             String
+  annual_fee         Decimal   @default(0)
+  color              String    @default("#1E3A8A")
+  
+  reward_currency        String    @default("points")
+  current_points_balance Int       @default(0)
+  point_value_cents      Decimal   @default(1.0)
+  base_multiplier        Decimal   @default(1.0)
+  bonus_rules            String?   // JSON
+  
+  plaid_account_id       String?
+  mask                   String?
+  current_balance        Decimal? @default(0)
+  available_balance      Decimal? @default(0)
+  credit_limit           Decimal? 
 
-  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  rewards  CardReward[]
-  benefits CardBenefit[]
+  benefits_fetched_at DateTime?
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+  deleted_at         DateTime?
 
-  @@map("cards")
+  rewards            CardReward[]
+  benefits           CardBenefit[]
+  ledger             RewardLedger[]
+  transactions       Transaction[] @relation("CardUsed")
+  recommended_txs    Transaction[] @relation("RecommendedCard")
+  rules              CardRewardRule[]
+}
+
+model RewardLedger {
+  id                 String    @id @default(uuid())
+  user_id            String
+  card_id            String
+  card               Card      @relation(fields: [card_id], references: [id])
+  event_type         String 
+  points_change      Int
+  value_cents_change Int?
+  transaction_id     String?
+  note               String?
+  created_at         DateTime  @default(now())
 }
 
 model CardReward {
-  id          String  @id @default(uuid())
-  cardId      String  @map("card_id")
-  categoryId  String? @map("category_id") // Can be null for "base catch-all"
-  categoryName String? @map("category_name") // e.g. "Dining", "Travel"
-  multiplier  Decimal @db.Decimal(5, 2) // e.g. 3.00, 1.50
-  pointType   String  @map("point_type") // e.g. "UR", "MR", "Cashback"
-  
-  card Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  id            String   @id @default(uuid())
+  card_id       String
+  card          Card     @relation(fields: [card_id], references: [id])
+  category      String
+  reward_type   String
+  reward_value  Decimal
+  spending_cap  Decimal?
+  created_at    DateTime @default(now())
+}
 
-  @@map("card_rewards")
+model CardRewardRule {
+  id           String   @id @default(uuid())
+  card_id      String
+  card         Card     @relation(fields: [card_id], references: [id])
+  category     String 
+  multiplier   Decimal
+  spending_cap Decimal?
+  created_at   DateTime @default(now())
 }
 
 model CardBenefit {
-  id          String    @id @default(uuid())
-  cardId      String    @map("card_id")
-  benefitName String    @map("benefit_name")
-  value       Decimal?  @db.Decimal(10, 2)
-  expiryDate  DateTime? @map("expiry_date")
-  usedAmount  Decimal   @default(0) @map("used_amount") @db.Decimal(10, 2)
-  totalAmount Decimal?  @map("total_amount") @db.Decimal(10, 2)
-  description String?
-  
-  card Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  id              String   @id @default(uuid())
+  card_id         String
+  card            Card     @relation(fields: [card_id], references: [id])
+  benefit_type    String
+  benefit_name    String
+  benefit_value   Decimal?
+  expiration_type String?
+  expiration_date DateTime?
+  created_at      DateTime @default(now())
+}
 
-  @@map("card_benefits")
+model PlaidConnection {
+  id                     String    @id @default(uuid())
+  user_id                String
+  user                   User      @relation(fields: [user_id], references: [id])
+  access_token_encrypted Bytes
+  institution_id         String
+  institution_name       String?
+  last_sync              DateTime?
+  created_at             DateTime  @default(now())
+}
+
+model Transaction {
+  id                    String    @id @default(uuid())
+  user_id               String
+  user                  User      @relation(fields: [user_id], references: [id])
+  date                  DateTime
+  merchant_name         String
+  amount                Decimal
+  category              String?
+  plaid_transaction_id  String?   @unique
+  
+  card_used_id          String?
+  card_used             Card?     @relation("CardUsed", fields: [card_used_id], references: [id])
+  
+  recommended_card_id   String?
+  recommended_card      Card?     @relation("RecommendedCard", fields: [recommended_card_id], references: [id])
+  
+  potential_extra_value Decimal?
+  ai_confidence         Decimal?
+  ai_source             String?
+  ai_error              String? 
+
+  category_resolved       String?
+  estimated_points_earned Int?
+  estimated_value_cents   Int?
+  best_possible_points    Int?
+  missed_points           Int?
+  
+  description             String?
+  
+  created_at            DateTime  @default(now())
+  deleted_at            DateTime?
+
+  @@index([user_id, date])
+}
+
+model AIStatus {
+  id              String   @id @default(uuid())
+  mode            String
+  is_reachable    Boolean
+  last_check      DateTime @default(now())
+  last_success_at DateTime?
+  last_failure_at DateTime?
+  last_error      String?
 }
 
 model MerchantCategory {
-  id                 String   @id @default(uuid())
-  plaidCategoryId    String?  @unique @map("plaid_category_id")
-  merchantName       String?  @map("merchant_name") // If mapping specific merchant
-  normalizedCategory String   @map("normalized_category") // Our internal category: Dining, Gas, etc.
-  userOverride       Boolean  @default(false) @map("user_override")
-  confidence         Float    @default(1.0)
-  updatedAt          DateTime @updatedAt @map("updated_at")
-
-  @@map("merchant_categories")
+  id               String   @id @default(uuid())
+  merchant_pattern String   @unique
+  category         String
+  confidence       Decimal  @default(0.95)
+  times_seen       Int      @default(1)
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
 }
 
 model Notification {
-  id        String   @id @default(uuid())
-  userId    String   @map("user_id")
-  type      String   // ALERT, WEEKLY_SUMMARY, TIP
-  title     String
-  message   String
-  actionUrl String?  @map("action_url")
-  isRead    Boolean  @default(false) @map("is_read")
-  createdAt DateTime @default(now()) @map("created_at")
-  readAt    DateTime? @map("read_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("notifications")
+  id         String   @id @default(uuid())
+  user_id    String
+  user       User     @relation(fields: [user_id], references: [id])
+  type       String
+  priority   String
+  title      String
+  message    String
+  action_url String?
+  is_read    Boolean  @default(false)
+  created_at DateTime @default(now())
 }
 
-model AgentSummary {
+model AuditLog {
+  id            String   @id @default(uuid())
+  event_type    String
+  user_id       String?
+  user          User?    @relation(fields: [user_id], references: [id])
+  actor_id      String?
+  resource_type String?
+  resource_id   String?
+  action        String?
+  ip_address    String?
+  user_agent    String?
+  metadata      String?
+  created_at    DateTime @default(now())
+
+  @@index([user_id, created_at])
+}
+
+model JobRun {
+  id        String    @id @default(uuid())
+  user_id   String
+  user      User      @relation(fields: [user_id], references: [id])
+  job_name  String
+  status    String    
+  error     String?
+  started_at DateTime @default(now())
+  ended_at   DateTime?
+}
+
+model RefCard {
+  id        String   @id @default(uuid())
+  issuer    String
+  name      String
+  imageUrl  String?  @map("image_url")
+  applyUrl  String?  @map("apply_url")
+  annualFee String?  @map("annual_fee")
+  apr       String?
+  welcomeBonus String? @map("welcome_bonus")
+  minSpend  String?  @map("min_spend")
+  rewards   String   
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([issuer, name])
+  @@map("ref_cards")
+}
+
+model UserProfile {
   id              String   @id @default(uuid())
-  userId          String   @map("user_id")
-  startDate       DateTime @map("start_date")
-  endDate         DateTime @map("end_date")
-  summaryText     String   @db.Text @map("summary_text")
-  totalMissedValue Decimal @map("total_missed_value") @db.Decimal(10, 2)
-  createdAt       DateTime @default(now()) @map("created_at")
+  user_id         String   @unique
+  user            User     @relation(fields: [user_id], references: [id])
+  full_name       String?
+  phone_number    String?
+  zip_code        String?
+  address_type    String? 
+  marital_status  String? 
+  children_count  Int      @default(0)
+  has_vehicle     Boolean  @default(false)
+  income_range    String?  
+  updated_at      DateTime @updatedAt
+}
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+model CreditScoreProfile {
+  id            String   @id @default(uuid())
+  user_id       String   @unique
+  user          User     @relation(fields: [user_id], references: [id])
+  score         Int      @default(0)
+  source        String?
+  last_updated  DateTime @default(now())
+  history       String?
+}
 
-  @@map("agent_summaries")
+model Budget {
+  id              String   @id @default(uuid())
+  user_id         String   @unique
+  user            User     @relation(fields: [user_id], references: [id])
+  monthly_limit   Decimal  @default(0)
+  alert_threshold Int      @default(80)
+  categories      String?  
+  updated_at      DateTime @updatedAt
+}
+
+model Goal {
+  id                   String   @id @default(uuid())
+  user_id              String
+  user                 User     @relation(fields: [user_id], references: [id])
+  name                 String
+  reason               String   
+  target_amount        Decimal
+  current_amount       Decimal  @default(0)
+  monthly_contribution Decimal  @default(0)
+  target_date          DateTime
+  funding_source_id    String?  
+  status               String   @default("ACTIVE")
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  milestones           GoalMilestone[]
+}
+
+model GoalMilestone {
+  id          String   @id @default(uuid())
+  goal_id     String
+  goal        Goal     @relation(fields: [goal_id], references: [id])
+  percent     Int      
+  reached_at  DateTime @default(now())
 }

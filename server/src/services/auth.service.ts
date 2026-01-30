@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { prisma } from '../utils/prisma';
+import { PrismaClient } from '@prisma/client';
 import { logger } from '../utils/logger';
 import { randomBytes } from 'crypto';
 
@@ -9,7 +9,7 @@ const SESSION_DURATION_DAYS = 7;
 
 export class AuthService {
     // Register User
-    async register(email: string, password: string) {
+    async register(prisma: PrismaClient, email: string, password: string) {
         // Check if user exists
         const existing = await prisma.user.findUnique({ where: { email } });
         if (existing) {
@@ -21,7 +21,7 @@ export class AuthService {
         const user = await prisma.user.create({
             data: {
                 email,
-                passwordHash,
+                password_hash: passwordHash,
             },
         });
 
@@ -30,28 +30,28 @@ export class AuthService {
     }
 
     // Login User
-    async login(email: string, password: string, ipAddress?: string, userAgent?: string) {
+    async login(prisma: PrismaClient, email: string, password: string, ipAddress?: string, userAgent?: string) {
         const user = await prisma.user.findUnique({ where: { email } });
 
         // Lockout check
-        if (user && user.isLocked) {
-            if (user.lockoutUntil && user.lockoutUntil > new Date()) {
+        if (user && user.is_locked) {
+            if (user.lockout_until && user.lockout_until > new Date()) {
                 throw new Error('Account locked. Try again later.');
             } else {
                 // Unlock if time passed
-                await prisma.user.update({ where: { id: user.id }, data: { isLocked: false, failedLoginAttempts: 0, lockoutUntil: null } });
+                await prisma.user.update({ where: { id: user.id }, data: { is_locked: false, failed_login_attempts: 0, lockout_until: null } });
             }
         }
 
-        if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+        if (!user || !(await bcrypt.compare(password, user.password_hash))) {
             // Increment failed attempts
             if (user) {
-                const attempts = user.failedLoginAttempts + 1;
-                let updateData: any = { failedLoginAttempts: attempts };
+                const attempts = user.failed_login_attempts + 1;
+                let updateData: any = { failed_login_attempts: attempts };
 
                 if (attempts >= 5) {
-                    updateData.isLocked = true;
-                    updateData.lockoutUntil = new Date(Date.now() + 15 * 60 * 1000); // 15 min
+                    updateData.is_locked = true;
+                    updateData.lockout_until = new Date(Date.now() + 15 * 60 * 1000); // 15 min
                     logger.warn(`User ${user.id} locked out due to failed attempts`);
                 }
                 await prisma.user.update({ where: { id: user.id }, data: updateData });
@@ -60,8 +60,8 @@ export class AuthService {
         }
 
         // Reset failed attempts on success
-        if (user.failedLoginAttempts > 0) {
-            await prisma.user.update({ where: { id: user.id }, data: { failedLoginAttempts: 0, isLocked: false, lockoutUntil: null } });
+        if (user.failed_login_attempts > 0) {
+            await prisma.user.update({ where: { id: user.id }, data: { failed_login_attempts: 0, is_locked: false, lockout_until: null } });
         }
 
         // Create Session
@@ -71,11 +71,11 @@ export class AuthService {
 
         const session = await prisma.session.create({
             data: {
-                userId: user.id,
-                tokenHash: sessionTokenResult.hash, // Store hash of token used for validation
-                expiresAt,
-                ipAddress,
-                userAgent,
+                user_id: user.id,
+                token_hash: sessionTokenResult.hash, // Store hash of token used for validation
+                expires_at: expiresAt,
+                ip_address: ipAddress,
+                user_agent: userAgent,
             },
         });
 
@@ -107,10 +107,10 @@ export class AuthService {
         // Let's rely on Session ID primarily.
     }
 
-    async logout(sessionId: string) {
+    async logout(prisma: PrismaClient, sessionId: string) {
         await prisma.session.update({
             where: { id: sessionId },
-            data: { isActive: false }
+            data: { expires_at: new Date() }
         });
     }
 }

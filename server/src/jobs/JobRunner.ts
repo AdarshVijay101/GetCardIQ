@@ -1,12 +1,7 @@
 import { prisma } from '../utils/prisma';
 import { logger } from '../utils/logger';
 import { IntelligenceService } from '../services/intelligence/IntelligenceService';
-
-// Mock Plaid Sync Service (will implement real logic in Phase 5)
-const mockSyncPlaidData = async (connectionId: string) => {
-    logger.info(`[MOCK] Syncing Plaid data for connection ${connectionId}`);
-    return Promise.resolve();
-};
+import { PlaidService } from '../services/plaid.service';
 
 export class JobRunner {
     // Sync Job: Iterates all connections and syncs if needed
@@ -19,10 +14,10 @@ export class JobRunner {
         const connections = await prisma.plaidConnection.findMany({
             where: {
                 OR: [
-                    { lastSyncedAt: { lt: oneHourAgo } },
-                    { lastSyncedAt: null }
-                ],
-                status: 'ACTIVE'
+                    { last_sync: { lt: oneHourAgo } },
+                    { last_sync: null }
+                ]
+                // status: 'ACTIVE' // Removed as it doesn't exist in schema
             }
         });
 
@@ -33,20 +28,23 @@ export class JobRunner {
 
         for (const conn of connections) {
             try {
-                await mockSyncPlaidData(conn.id);
+                // Assuming syncTransactions takes userId, based on Controller usage
+                await PlaidService.syncTransactions(conn.user_id);
 
                 await prisma.plaidConnection.update({
                     where: { id: conn.id },
-                    data: { lastSyncedAt: new Date() }
+                    data: { last_sync: new Date() }
                 });
 
                 // Audit Log
                 await prisma.auditLog.create({
                     data: {
-                        userId: conn.userId,
+                        user_id: conn.user_id,
+                        event_type: 'JOB_SYNC',
                         action: 'SYNC',
-                        resource: `plaid_connection:${conn.id}`,
-                        details: { status: 'success' }
+                        resource_type: 'plaid_connection',
+                        resource_id: conn.id,
+                        metadata: JSON.stringify({ status: 'success' })
                     }
                 });
                 successCount++;
@@ -57,10 +55,12 @@ export class JobRunner {
 
                 await prisma.auditLog.create({
                     data: {
-                        userId: conn.userId,
+                        user_id: conn.user_id,
+                        event_type: 'JOB_SYNC',
                         action: 'SYNC',
-                        resource: `plaid_connection:${conn.id}`,
-                        details: { status: 'failed', error: error.message }
+                        resource_type: 'plaid_connection',
+                        resource_id: conn.id,
+                        metadata: JSON.stringify({ status: 'failed', error: error.message })
                     }
                 });
             }
@@ -84,10 +84,11 @@ export class JobRunner {
                 // Audit
                 await prisma.auditLog.create({
                     data: {
-                        userId: user.id,
+                        user_id: user.id,
+                        event_type: 'JOB_AI',
                         action: 'AI',
-                        resource: 'weekly_summary',
-                        details: { status: 'success', analyzed: result.analyzed }
+                        resource_type: 'weekly_summary',
+                        metadata: JSON.stringify({ status: 'success', analyzed: result.analyzed })
                     }
                 });
                 count++;

@@ -1,0 +1,36 @@
+{
+  "environment": {
+    "has_db_url": true,
+    "has_db_url_demo": true,
+    "distinct": true
+  },
+  "codebase_scan": {
+    "forbidden_files": [
+      "audit-analytics.ts",
+      "audit-card.ts",
+      "audit-final.ts",
+      "audit-proof.ts",
+      "backfill.ts",
+      "clear-alerts.ts",
+      "db\\init.ts",
+      "force-fix.ts",
+      "jobs\\alertGenerator.ts",
+      "jobs\\cardUpdate.job.ts",
+      "jobs\\monthlyAudit.ts",
+      "scripts\\check_transactions.ts",
+      "scripts\\create_fresh_user.ts",
+      "scripts\\seedDevUser.ts",
+      "seed\\cards.ts",
+      "seed\\user_wallet.ts",
+      "test-benefits.ts",
+      "test-recurring.ts",
+      "verify-all.ts"
+    ]
+  },
+  "connection_test": {
+    "real": true,
+    "demo": true,
+    "error": null
+  },
+  "success": false
+}

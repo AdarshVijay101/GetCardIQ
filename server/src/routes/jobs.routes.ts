@@ -9,5 +9,6 @@ router.use(verifyJobScheduler);
 
 router.post('/sync', JobsController.triggerSync);
 router.post('/weekly-summary', JobsController.triggerWeeklySummary);
+router.post('/update-cards', JobsController.triggerCardUpdate);
 
 export default router;

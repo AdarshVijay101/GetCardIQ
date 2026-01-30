@@ -1,161 +1,213 @@
-import { plaidClient } from '../config/plaid';
-import { prisma } from '../utils/prisma';
-import { EncryptionService } from '../security/encryption/EncryptionService';
-import { CountryCode, Products, LinkTokenCreateRequest, TransactionsSyncRequest } from 'plaid';
-import { logger } from '../utils/logger';
+import { Configuration, PlaidApi, PlaidEnvironments, Products, CountryCode } from 'plaid';
+import { encrypt, decrypt } from '../utils/encryption';
+import { PrismaClient } from '@prisma/client';
+import { RewardsEstimationService } from './rewards/estimation';
 
-const encryptionService = new EncryptionService();
+// const prisma = new PrismaClient(); // REMOVED: Injected
 
-export class PlaidService {
+const PLAID_ENV = process.env.PLAID_ENV || 'sandbox';
+const PLAID_CLIENT_ID = process.env.PLAID_CLIENT_ID;
+const PLAID_SECRET = process.env.PLAID_SECRET;
 
-    // 1. Create Link Token (for Frontend)
-    static async createLinkToken(userId: string) {
-        const request: LinkTokenCreateRequest = {
-            user: { client_user_id: userId },
-            client_name: 'GetCardIQ',
-            products: [Products.Transactions],
-            country_codes: [CountryCode.Us],
-            language: 'en',
-        };
+if (!PLAID_CLIENT_ID || !PLAID_SECRET) {
+    console.error("[Plaid] Missing PLAID_CLIENT_ID or PLAID_SECRET");
+}
 
+const configuration = new Configuration({
+    basePath: PlaidEnvironments[PLAID_ENV as keyof typeof PlaidEnvironments],
+    baseOptions: {
+        headers: {
+            'PLAID-CLIENT-ID': PLAID_CLIENT_ID,
+            'PLAID-SECRET': PLAID_SECRET,
+        },
+    },
+});
+
+export const plaidClient = new PlaidApi(configuration);
+
+export const PlaidService = {
+    createLinkToken: async (userId: string) => {
         try {
-            const response = await plaidClient.linkTokenCreate(request);
+            const response = await plaidClient.linkTokenCreate({
+                user: { client_user_id: userId },
+                client_name: 'GetCardIQ',
+                products: [Products.Transactions],
+                country_codes: [CountryCode.Us],
+                language: 'en',
+            });
             return response.data;
-        } catch (error) {
-            logger.error('Error creating link token', error);
+        } catch (error: any) {
+            console.error("Plaid Link Token Failed. Details:", JSON.stringify(error.response?.data || error));
             throw error;
         }
-    }
+    },
 
-    // 2. Exchange Public Token (Save Access Token Securely)
-    static async exchangePublicToken(userId: string, publicToken: string) {
-        try {
-            const response = await plaidClient.itemPublicTokenExchange({
-                public_token: publicToken,
-            });
+    exchangePublicToken: async (prisma: PrismaClient, userId: string, publicToken: string, metadata?: any) => {
+        const response = await plaidClient.itemPublicTokenExchange({
+            public_token: publicToken,
+        });
 
-            const accessToken = response.data.access_token;
-            const itemId = response.data.item_id;
+        const accessToken = response.data.access_token;
+        const itemId = response.data.item_id;
 
-            // Encrypt Access Token (Upgrade A)
-            const encrypted = await encryptionService.encrypt(accessToken);
+        // SOC-2 Requirement: Encrypt Access Token at Rest
+        const encryptedToken = encrypt(accessToken);
 
-            // Save to DB
-            const connection = await prisma.plaidConnection.create({
+        // Ensure user exists (Lazy Create for Dev/Demo)
+        const userExists = await prisma.user.findUnique({ where: { id: userId } });
+        if (!userExists) {
+            console.log(`[Plaid] Lazy-creating user ${userId}`);
+            await prisma.user.create({
                 data: {
-                    userId,
-                    itemId,
-                    accessTokenCiphertext: encrypted.ciphertext,
-                    accessTokenIv: encrypted.iv,
-                    accessTokenTag: encrypted.tag,
-                    keyVersion: encrypted.version,
-                    status: 'ACTIVE'
+                    id: userId,
+                    email: `user_${userId}@getcardiq.com`,
+                    password_hash: 'auto-generated'
                 }
             });
-
-            return connection;
-        } catch (error) {
-            logger.error('Error exchanging public token', error);
-            throw error;
         }
-    }
 
-    // 3. Sync Transactions (Called by Job or Webhook)
-    static async syncTransactions(connectionId: string) {
-        const connection = await prisma.plaidConnection.findUnique({
-            where: { id: connectionId }
+        // Use metadata if available for better names
+        const institutionId = metadata?.institution?.institution_id || 'ins_unknown';
+        const institutionName = metadata?.institution?.name || 'Unknown Bank';
+
+        await prisma.plaidConnection.create({
+            data: {
+                user_id: userId,
+                institution_id: institutionId,
+                institution_name: institutionName,
+                access_token_encrypted: encryptedToken,
+            }
         });
 
-        if (!connection) throw new Error('Connection not found');
-
-        // Decrypt Access Token
-        const accessToken = await encryptionService.decrypt({
-            ciphertext: connection.accessTokenCiphertext,
-            iv: connection.accessTokenIv,
-            tag: connection.accessTokenTag,
-            version: connection.keyVersion
-        });
-
-        // TODO: Handle cursor for incremental sync. For MVP, simple get recent.
-        // Ideally we store `nextCursor` in DB. schema.prisma doesn't have it yet.
-        // We'll just fetch latest 30 days for this "Plaid Sync" logic in MVP Upgrade.
-
-        // Using transactionsGet for simplicity if sync is complex to state manage without cursor column
-        // But Sync is recommended. Let's try Sync with null cursor.
+        // Trigger initial sync immediately (Fire and forget or catch error so exchange doesn't fail)
         try {
-            let cursor = undefined; // We need to store this in DB to be real.
-            // Quick fix: Add 'cursor' field to PlaidConnection later.
+            await PlaidService.syncTransactions(prisma, userId);
+        } catch (syncErr) {
+            console.error("Initial sync failed (non-fatal):", syncErr);
+        }
 
-            // For now, let's use `transactionsGet` to be stateless and safe for MVP.
-            const startDate = new Date();
-            startDate.setDate(startDate.getDate() - 30);
-            const endDate = new Date();
+        return { itemId };
+    },
 
-            const response = await plaidClient.transactionsGet({
-                access_token: accessToken,
-                start_date: startDate.toISOString().split('T')[0],
-                end_date: endDate.toISOString().split('T')[0],
-            });
+    syncTransactions: async (prisma: PrismaClient, userId: string) => {
+        // 1. Fetch encrypted tokens
+        const connections = await prisma.plaidConnection.findMany({ where: { user_id: userId } });
 
-            const accounts = response.data.accounts;
-            const transactions = response.data.transactions;
+        for (const conn of connections) {
+            // 2. Decrypt
+            const accessToken = decrypt(conn.access_token_encrypted);
 
-            // Upsert Accounts
-            for (const acc of accounts) {
-                await prisma.account.upsert({
-                    where: { plaidAccountId: acc.account_id },
-                    update: {
-                        balance: acc.balances.current || 0,
-                        name: acc.name,
-                        mask: acc.mask,
-                        subtype: acc.subtype?.toString()
-                    },
-                    create: {
-                        connectionId: connection.id,
-                        plaidAccountId: acc.account_id,
-                        name: acc.name,
-                        mask: acc.mask,
-                        type: acc.type,
-                        subtype: acc.subtype?.toString(),
-                        balance: acc.balances.current || 0,
-                        isoCurrencyCode: acc.balances.iso_currency_code
+            // 3a. Fetch & Sync Accounts (Balances)
+            try {
+                const accountsRes = await plaidClient.accountsGet({ access_token: accessToken });
+                const accounts = accountsRes.data.accounts;
+                console.log(`[Plaid] Connection ${conn.id}: Found ${accounts.length} accounts.`);
+
+                for (const acc of accounts) {
+                    if (acc.type === 'credit' || acc.type === 'depository') {
+                        // Upsert Card/Account
+                        const existing = await prisma.card.findFirst({
+                            where: { plaid_account_id: acc.account_id }
+                        });
+
+                        if (existing) {
+                            await prisma.card.update({
+                                where: { id: existing.id },
+                                data: {
+                                    current_balance: acc.balances.current,
+                                    available_balance: acc.balances.available,
+                                    credit_limit: acc.balances.limit,
+                                    mask: acc.mask,
+                                }
+                            });
+                        } else {
+                            console.log(`[Plaid] Creating new card: ${acc.name} (${acc.mask})`);
+                            await prisma.card.create({
+                                data: {
+                                    user_id: userId,
+                                    plaid_account_id: acc.account_id,
+                                    nickname: acc.name,
+                                    issuer: conn.institution_name || 'Unknown Bank',
+                                    card_type: acc.type,
+                                    mask: acc.mask,
+                                    current_balance: acc.balances.current,
+                                    available_balance: acc.balances.available,
+                                    credit_limit: acc.balances.limit,
+                                    color: acc.type === 'credit' ? '#1E3A8A' : '#10B981',
+                                }
+                            });
+                        }
+                    } else {
+                        console.log(`[Plaid] Skipping account type: ${acc.type}`);
                     }
-                });
+                }
+            } catch (err) {
+                console.error(`[Plaid] Failed to sync accounts for conn ${conn.id}. Access Token: ${accessToken.substring(0, 10)}...`, err);
             }
 
-            // Upsert Transactions
-            for (const tx of transactions) {
-                // Find our account ID based on plaid account id
-                const dbAccount = await prisma.account.findUnique({
-                    where: { plaidAccountId: tx.account_id }
-                });
+            // 3b. Fetch from Plaid (Transactions)
+            try {
+                let plTransactions: any[] = [];
+                try {
+                    const response = await plaidClient.transactionsSync({
+                        access_token: accessToken,
+                    });
+                    plTransactions = response.data.added;
+                } catch (e) {
+                    console.warn(`[Plaid] Sync cursor failed, trying legacy Get...`);
+                }
 
-                if (!dbAccount) continue;
+                // FALLBACK: If Sync returns nothing (common in fresh Sandbox items), force a Get
+                if (plTransactions.length === 0) {
+                    console.log(`[Plaid] Sync returned 0. Attempting legacy transactionsGet...`);
+                    const startDate = new Date();
+                    startDate.setDate(startDate.getDate() - 90); // Fetch 90 days
+                    const response = await plaidClient.transactionsGet({
+                        access_token: accessToken,
+                        start_date: startDate.toISOString().split('T')[0],
+                        end_date: new Date().toISOString().split('T')[0]
+                    });
+                    plTransactions = response.data.transactions;
+                }
 
-                await prisma.transaction.upsert({
-                    where: { plaidTransactionId: tx.transaction_id },
-                    update: {
-                        amount: tx.amount, // Note: Plaid positive = expense
-                        // Logic to update category if changed?
-                    },
-                    create: {
-                        accountId: dbAccount.id,
-                        plaidTransactionId: tx.transaction_id,
-                        amount: tx.amount,
-                        date: new Date(tx.date),
-                        merchantName: tx.merchant_name || tx.name,
-                        categoryId: tx.category ? tx.category[0] : null, // Primitive mapping
-                        // Other fields default
+                const newTxIds: string[] = [];
+
+                // 4. Save to DB (Normalize)
+                for (const tx of plTransactions) {
+                    // Link to the Card we just upserted
+                    const card = await prisma.card.findFirst({
+                        where: { plaid_account_id: tx.account_id }
+                    });
+
+                    const created = await prisma.transaction.create({
+                        data: {
+                            user_id: userId,
+                            merchant_name: tx.merchant_name || tx.name || 'Unknown',
+                            amount: new Date(tx.date) > new Date() ? 0 : tx.amount,
+                            date: new Date(tx.date),
+                            plaid_transaction_id: tx.transaction_id,
+                            card_used_id: card ? card.id : undefined,
+                            category: tx.personal_finance_category?.primary || tx.category?.[0] || 'Uncategorized'
+                        }
+                    });
+                    newTxIds.push(created.id);
+                }
+                console.log(`[Plaid] Synced ${plTransactions.length} transactions for item ${conn.id}`);
+
+                // 5. Run Rewards Estimation Engine (OPTIMIZED)
+                if (newTxIds.length > 0) {
+                    try {
+                        console.log(`[Rewards] Computing points for ${newTxIds.length} new transactions...`);
+                        const computed = await RewardsEstimationService.computeForTransactions(prisma, newTxIds);
+                        console.log(`[Rewards] Updated points for ${computed} transactions`);
+                    } catch (err) {
+                        console.error("[Rewards] Estimation failed", err);
                     }
-                });
+                }
+
+            } catch (txErr) {
+                console.error("Failed to sync transactions for conn " + conn.id, txErr);
             }
-
-            logger.info(`Synced ${transactions.length} transactions for connection ${connection.id}`);
-            return { added: transactions.length };
-
-        } catch (error) {
-            logger.error(`Plaid Sync Error for ${connection.id}`, error);
-            throw error;
         }
     }
-}
+};
