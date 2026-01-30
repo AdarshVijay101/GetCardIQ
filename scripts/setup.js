@@ -21,6 +21,27 @@ function run(cmd, cwd = ROOT) {
 }
 function fileExists(p) { return fs.existsSync(p); }
 
+function parseEnvFile(envPath) {
+    if (!fs.existsSync(envPath)) return {};
+    const content = fs.readFileSync(envPath, 'utf8');
+    const out = {};
+    for (const rawLine of content.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith('#')) continue;
+        const eq = line.indexOf('=');
+        if (eq === -1) continue;
+        const key = line.slice(0, eq).trim();
+        let val = line.slice(eq + 1).trim();
+
+        // strip wrapping quotes
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+            val = val.slice(1, -1);
+        }
+        out[key] = val;
+    }
+    return out;
+}
+
 // --- MAIN ---
 async function main() {
     print("🚀 Starting GetCardIQ Setup (Node.js)...", '32');
@@ -80,10 +101,10 @@ async function main() {
     print("\n📥 Installing Client Dependencies...");
     run('npm install', CLIENT_DIR);
 
-    // 5. PARSE ENV (To get DB URLs)
-    require('dotenv').config({ path: serverEnvPath });
-    const dbUrl = process.env.DATABASE_URL;
-    const dbUrlDemo = process.env.DATABASE_URL_DEMO;
+    // 5. PARSE ENV (To get DB URLs) - no external deps
+    const envMap = parseEnvFile(serverEnvPath);
+    const dbUrl = envMap.DATABASE_URL || process.env.DATABASE_URL;
+    const dbUrlDemo = envMap.DATABASE_URL_DEMO || process.env.DATABASE_URL_DEMO;
 
     if (!dbUrl || dbUrl.includes('postgres:password')) {
         print("\n⚠️  WARNING: DATABASE_URL seems to be default. DB connection might fail.", '33');
