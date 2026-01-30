@@ -1,4 +1,4 @@
-import { prisma } from '../utils/prisma';
+import { prismaReal as prisma } from '../db/prisma';
 import { logger } from '../utils/logger';
 import { IntelligenceService } from '../services/intelligence/IntelligenceService';
 import { PlaidService } from '../services/plaid.service';
