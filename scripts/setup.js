@@ -42,9 +42,20 @@ async function main() {
 
     // Client
     const clientEnvPath = path.join(CLIENT_DIR, '.env.local');
+    const clientEnvExamplePath = path.join(CLIENT_DIR, '.env.example');
+
     if (!fileExists(clientEnvPath)) {
-        fs.copyFileSync(path.join(CLIENT_DIR, '.env.example'), clientEnvPath);
-        print("✅ Created client/.env.local");
+        if (fileExists(clientEnvExamplePath)) {
+            fs.copyFileSync(clientEnvExamplePath, clientEnvPath);
+            print("✅ Created client/.env.local");
+        } else {
+            // Fallback: create a minimal working env.local
+            fs.writeFileSync(
+                clientEnvPath,
+                "NEXT_PUBLIC_API_URL=http://localhost:4000\nNEXT_PUBLIC_PY_API_URL=http://127.0.0.1:8000\n"
+            );
+            print("✅ Created client/.env.local (fallback defaults)");
+        }
     }
 
     // 3. MANUAL CONFIG PROMPT
