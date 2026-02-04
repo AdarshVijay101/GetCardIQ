@@ -82,3 +82,9 @@ check_url.py
 server/test_db.js
 server/test_ddl.js
 server/check_db.ts
+
+# Docker image exports (do not commit)
+*.tar
+*.tar.gz
+*.zip
+deploy/prebuilt/.env
