@@ -9,7 +9,14 @@ Prebuilt Docker images + compose so you can run without building source.
 ## Files you need in this folder
 - docker-compose.prebuilt.yml
 - .env  (copy from .env.example)
-- getcardiq-images.tar  (provided separately)
+- getcardiq-images.tar  (download from Release)
+
+## Environment Variables
+The `.env` file requires the following keys:
+- **Required**: `DATABASE_URL`, `DATABASE_URL_DEMO` (pre-filled), `PLAID_CLIENT_ID`, `PLAID_SECRET`.
+- **Required for AI**: `GEMINI_API_KEY` (for Money Left Behind & Insights).
+- **Optional**: `GCP_ENCRYPTION_...` (if using cloud sync).
+
 
 ## One-command setup
 1) Copy `.env.example` to `.env` and fill values (especially AI keys if needed).
