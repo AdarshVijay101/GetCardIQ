@@ -88,3 +88,7 @@ server/check_db.ts
 *.tar.gz
 *.zip
 deploy/prebuilt/.env
+
+# Ignore local verification clone
+GetCardIQ/
+
