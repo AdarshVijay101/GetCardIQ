@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: getcardiq-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: getcardsiq
+    ports:
+      - "5432:5432"
+    volumes:
+      - getcardiq_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped
+
+  python_api:
+    image: ghcr.io/adarshvijay101/getcardiq-python_api:v1.0-prebuilt
+    container_name: getcardiq-python
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  server:
+    image: ghcr.io/adarshvijay101/getcardiq-server:v1.0-prebuilt
+    container_name: getcardiq-server
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    ports:
+      - "4000:4000"
+    restart: unless-stopped
+
+  client:
+    image: ghcr.io/adarshvijay101/getcardiq-client:v1.0-prebuilt
+    container_name: getcardiq-client
+    depends_on:
+      - server
+      - python_api
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+volumes:
+  getcardiq_postgres_data:

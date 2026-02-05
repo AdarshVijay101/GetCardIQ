@@ -16,11 +16,29 @@ if (!(Test-Path ".\.env")) {
     exit 1
 }
 
-Write-Host "1) Loading Docker images..."
-docker load -i $ImagesTar
+if (Test-Path $ImagesTar) {
+    Write-Host "1) 📦 OFFLINE MODE: Found images tarball." -ForegroundColor Cyan
+    Write-Host "   Loading Docker images from disk..."
+    docker load -i $ImagesTar
+    $ComposeFile = ".\docker-compose.prebuilt.yml"
+}
+else {
+    Write-Host "1) 🌍 REGISTRY MODE: Local images tar not found ($ImagesTar)." -ForegroundColor Cyan
+    Write-Host "   Switching to GitHub Container Registry (ghcr.io)..."
+    $ComposeFile = ".\docker-compose.registry.yml"
+    
+    Write-Host "   Pulling latest images..."
+    docker compose -f $ComposeFile pull
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Docker pull failed." -ForegroundColor Red
+        Write-Host "If the repo is private, ensure you have logged in:"
+        Write-Host "echo `$env:GHCR_TOKEN | docker login ghcr.io -u YOUR_USER --password-stdin"
+        exit 1
+    }
+}
 
-Write-Host "2) Starting containers..."
-docker compose -f .\docker-compose.prebuilt.yml up -d
+Write-Host "2) Starting containers using $ComposeFile..."
+docker compose -f $ComposeFile up -d
 
 Write-Host "3) Waiting for postgres to become healthy..."
 $max = 60
@@ -31,18 +49,18 @@ for ($i = 0; $i -lt $max; $i++) {
 }
 if ($status -ne "healthy") {
     Write-Host "ERROR: postgres not healthy. Check logs:"
-    docker compose -f .\docker-compose.prebuilt.yml logs postgres --tail 150
+    docker compose -f $ComposeFile logs postgres --tail 150
     exit 1
 }
 
 Write-Host "4) Pushing schema to REAL DB..."
-docker compose -f .\docker-compose.prebuilt.yml exec server npx prisma db push
+docker compose -f $ComposeFile exec server npx prisma db push
 
 Write-Host "5) Pushing schema to DEMO DB..."
-docker compose -f .\docker-compose.prebuilt.yml exec server node -e "process.env.DATABASE_URL=process.env.DATABASE_URL_DEMO; require('child_process').execSync('npx prisma db push', {stdio:'inherit'})"
+docker compose -f $ComposeFile exec server node -e "process.env.DATABASE_URL=process.env.DATABASE_URL_DEMO; require('child_process').execSync('npx prisma db push', {stdio:'inherit'})"
 
 Write-Host "6) Seeding demo data..."
-docker compose -f .\docker-compose.prebuilt.yml exec server npm run seed:demo
+docker compose -f $ComposeFile exec server npm run seed:demo
 
 Write-Host ""
 Write-Host "✅ Done."

@@ -9,7 +9,27 @@ Prebuilt Docker images + compose so you can run without building source.
 ## Files you need in this folder
 - docker-compose.prebuilt.yml
 - .env  (copy from .env.example)
-- getcardiq-images.tar  (download from Release)
+- Optional: getcardiq-images.tar (if offline)
+
+## Option A: Run from Registry (Recommended)
+This method downloads pre-built images from GitHub Container Registry.
+
+1. **Authentication (If Private)**
+   If the repository is private, you must login to GHCR first:
+   ```powershell
+   echo $env:GHCR_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
+   ```
+
+2. **Run Setup**
+   ```powershell
+   powershell ./setup.ps1
+   ```
+   *(The script automatically detects if `getcardiq-images.tar` is missing and defaults to pulling from Registry)*
+
+## Option B: Run from Offline Tarball
+If you have `getcardiq-images.tar` (e.g. from USB or Release), place it in this folder.
+1. Run `powershell ./setup.ps1`
+2. It will detect the file and load images from disk.
 
 ## Environment Variables
 The `.env` file requires the following keys:
@@ -17,25 +37,44 @@ The `.env` file requires the following keys:
 - **Required for AI**: `GEMINI_API_KEY` (for Money Left Behind & Insights).
 - **Optional**: `GCP_ENCRYPTION_...` (if using cloud sync).
 
+## 🛠️ For Admin: How to Push Images
+If you are the developer distributing this, here is how to build and push the images safely.
 
-## One-command setup
-1) Copy `.env.example` to `.env` and fill values (especially AI keys if needed).
-2) Run:
+**1. Login to GHCR**
+```powershell
+$env:GHCR_USER = "AdarshVijay101"
+$env:GHCR_TOKEN = "YOUR_GITHUB_PAT" # Scopes: read:packages, write:packages
+echo $env:GHCR_TOKEN | docker login ghcr.io -u $env:GHCR_USER --password-stdin
+```
 
-powershell ./setup.ps1
+**2. Build & Tag**
+```powershell
+# Build normal latest tags
+docker compose build
 
-## Manual run (if you don't want the script)
-docker load -i getcardiq-images.tar
-docker compose -f docker-compose.prebuilt.yml up -d
-docker compose -f docker-compose.prebuilt.yml exec server npx prisma db push
-docker compose -f docker-compose.prebuilt.yml exec server node -e "process.env.DATABASE_URL=process.env.DATABASE_URL_DEMO; require('child_process').execSync('npx prisma db push', {stdio:'inherit'})"
-docker compose -f docker-compose.prebuilt.yml exec server npm run seed:demo
+# Tag for Registry (Version: v1.0-prebuilt)
+docker tag getcardiq-server:latest ghcr.io/adarshvijay101/getcardiq-server:v1.0-prebuilt
+docker tag getcardiq-client:latest ghcr.io/adarshvijay101/getcardiq-client:v1.0-prebuilt
+docker tag getcardiq-python_api:latest ghcr.io/adarshvijay101/getcardiq-python_api:v1.0-prebuilt
+```
 
-Open:
-- http://localhost:3000
+**3. Push**
+```powershell
+docker push ghcr.io/adarshvijay101/getcardiq-server:v1.0-prebuilt
+docker push ghcr.io/adarshvijay101/getcardiq-client:v1.0-prebuilt
+docker push ghcr.io/adarshvijay101/getcardiq-python_api:v1.0-prebuilt
+```
 
-Stop:
-docker compose -f docker-compose.prebuilt.yml down
+---
 
-Reset DB:
-docker compose -f docker-compose.prebuilt.yml down -v
+## One-command setup (User)
+1. Copy `.env.example` to `.env` and fill values.
+2. Run `powershell ./setup.ps1`
+
+## Manual run (Registry)
+```powershell
+docker compose -f docker-compose.registry.yml pull
+docker compose -f docker-compose.registry.yml up -d
+```
+Then run schema push commands manually (see setup.ps1).
+
